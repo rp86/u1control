@@ -4,10 +4,10 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done on fix/agent-device-discovery (not pushed)
 
-- [ ] On a fresh agent with the configured host, discovery announces the U1
-- [ ] Connecting from that entry reaches the connected state and pushes status
-- [ ] Regression test fails before the fix and passes after
-- [ ] Existing agent tests (including multi-U1 job routing) still pass
+- [x] On a fresh agent with the configured host, discovery announces the U1
+- [x] Connecting from that entry reaches the connected state and pushes status
+- [x] Regression test fails before the fix and passes after
+- [x] Existing agent tests (including multi-U1 job routing) still pass
 

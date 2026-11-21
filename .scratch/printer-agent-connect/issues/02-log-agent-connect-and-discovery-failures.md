@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done on fix/agent-device-discovery (not pushed)
 
-- [ ] Skipped discovery logs why (no host known)
-- [ ] A failure on the first status read logs its cause once, not every 2 s poll
-- [ ] Existing connected-then-dropped logging is unchanged
-- [ ] Tests cover both log paths
+- [x] Skipped discovery logs why (no host known)
+- [x] A failure on the first status read logs its cause once, not every 2 s poll
+- [x] Existing connected-then-dropped logging is unchanged
+- [x] Tests cover both log paths
 

@@ -4,9 +4,9 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done on fix/agent-device-discovery (not pushed)
 
-- [ ] Changelog entry under the unreleased section, in the project's existing style
-- [ ] Setup steps match the behaviour after the fix
-- [ ] Translated setup steps (pt-BR) updated if the English ones change
+- [x] Changelog entry under the unreleased section, in the project's existing style
+- [x] Setup steps match the behaviour after the fix
+- [x] Translated setup steps (pt-BR) updated if the English ones change
 
