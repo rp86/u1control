@@ -7,3 +7,8 @@ Source: https://github.com/bloodf/u1control/issues/73 ("Gcode thumbnail permissi
 - Network: a canonical `scheme://host` entry is host-wide (every path, port, query). The plugin already declares one per printer and Spoolman at load (#48), so a printer already known at load does not prompt per URL.
 - Filesystem: `fs_read` / `fs_readwrite` targets are exact paths or `<dir>/*` trees. The plugin declares `fs_readwrite` as the bare folder `~/Downloads/u1control`, which is an exact path. Every new file saved into it (time-lapse videos, pictures, thumbnails, camera pictures) is a new runtime prompt, and OrcaSlicer saves the approval for that one file.
 - The reporter's prompt text is not in the issue (empty log), so which of the two prompts they saw is not confirmed.
+
+## Correction after review
+
+- Thumbnails (`.thumbs/*`) and time-lapse covers are returned to the page in memory; nothing is written to disk for them. `/screen/touch` is a POST to the printer. Those three paths in the report are network URLs, so the download-folder grant does not touch them. It does fix real per-file prompts for files saved to the download folder (time-lapse videos, pictures).
+- Per-URL network prompts happen only when the printer's origin was not granted at load: the origins come from the settings `host` and the printers used before (`network_origins`), and a printer first used in a session is left to runtime prompts until the next load. That is ticket 04.

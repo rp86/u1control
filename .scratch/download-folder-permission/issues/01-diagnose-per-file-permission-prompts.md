@@ -12,4 +12,4 @@
 
 ## Findings
 
-Network grants are host-wide as declared (`scheme://host`). The download folder is declared as a bare directory, which OrcaSlicer reads as one exact path, so each file saved into it prompts separately and is remembered per file. Not confirmed against the reporter's actual prompt text.
+Network grants are host-wide as declared (`scheme://host`). The download folder is declared as a bare directory, which OrcaSlicer reads as one exact path, so each file saved into it prompts separately and is remembered per file. Not confirmed against the reporter's actual prompt text. Correction: thumbnails and `/screen/touch` are network requests, not files, so they are not explained by the download folder grant.

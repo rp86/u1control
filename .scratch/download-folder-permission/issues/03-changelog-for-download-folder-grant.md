@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done on fix/download-folder-grant (not pushed)
 
-- [ ] Entry under Unreleased, Fixed, in the project's style
+- [x] Entry under Unreleased, Fixed, in the project's style
 

@@ -4,10 +4,10 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** done on fix/download-folder-grant (not pushed)
 
-- [ ] The plugin declares the download folder as a tree (`<folder>/*`), the same form as the sliced-job grant
-- [ ] One place names the folder, so the grant and the downloads can't drift apart
-- [ ] Declaring the grant at load creates nothing on disk
-- [ ] A test fails without the change and passes with it
+- [x] The plugin declares the download folder as a tree (`<folder>/*`), the same form as the sliced-job grant
+- [x] One place names the folder, so the grant and the downloads can't drift apart
+- [x] Declaring the grant at load creates nothing on disk
+- [x] A test fails without the change and passes with it
 
