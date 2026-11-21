@@ -32,12 +32,24 @@ HAS_SDCARD_NORMAL = 1          # DevStorage.h SdcardState
 # home_flag bit 16 = is_support_pa_calibration (DM parse_home_flag). DM parses home_flag after support_flow_calibration
 # in the same push and lets the bit win (DM:1216 over DM:3277), so without it the dialog's Flow calibration box hides.
 HAS_PA_CALIBRATION = 1 << 16
-# The Snapmaker U1's model_id in OrcaSlicer's profiles (resources/profiles/Snapmaker/machine/Snapmaker U1.json). It is
-# the device's printer_type (DevManager on_machine_alive reads ssdp dev_type), which the Print dialog compares with the
-# preset's model_id (DevConfigUtil is_printer_model_compatible); MRA sends the preset's model_id the same way. The
-# plugin API doesn't show a preset's model_id, so it is written here.
+# The Snapmaker U1's model_id in OrcaSlicer's profiles (resources/profiles/Snapmaker/machine/Snapmaker U1.json). It must
+# be the device's printer_type: the Print and Send dialogs compare it with the preset's model_id
+# (DevConfigUtil::is_printer_model_compatible), Sync from AMS and the sync badges need the two equal
+# (Plater::is_same_printer_for_connected_and_selected), and the Device tab names the model from it. OrcaSlicer 2.5.1
+# creates the device of a print_host preset with printer_type = the preset's printer_model, "Snapmaker U1"
+# (GUI_App::select_machine), which matches nothing: "Unknown", and the dialogs refuse it. Every push carries it
+# (DeviceManager.cpp parse_json reads print.printer_type), as the stock Moonraker agent sets obj->printer_type at each
+# filament fetch; the ssdp dev_type alone isn't enough, as 2.5.1 asks for discovery before the printer is connected.
+# The plugin API doesn't show a preset's model_id, so it is written here.
 U1_MODEL_ID = "797581801"
 CHAMBER_LIGHT = "chamber_light"
+# The stock firmware's camera picture, renewed only for ~60 s after camera.start_monitor (u1control's own camera does the
+# same keepalive, service.py CAMERA_KEEPALIVE)
+STOCK_CAMERA = "/server/files/camera/monitor.jpg"
+MONITOR_EVERY = 50.0    # s between camera.start_monitor requests while the Device tab shows the camera
+MONITOR_WATCHED = 10.0  # s since the Device tab last asked for the camera URL that still count as "showing it"
+# Device tab speed level (DevDefs.h DevPrintingSpeedLevel: silent, standard, sport, ludicrous) -> M220 percent, as Bambu's
+SPEED_PERCENT = {1: 50, 2: 100, 3: 124, 4: 166}
 LIGHT_ON, LIGHT_OFF = "SET_LED LED=cavity_led WHITE=1 SYNC=0", "SET_LED LED=cavity_led WHITE=0 SYNC=0"
 
 # Material -> OrcaFilamentLibrary family (MRA map_filament_type_to_generic_id).
@@ -118,7 +130,10 @@ def ams_block(heads, preferred=None):
             tray.update(tray_info_idx="", tray_type="", tray_color="00000000", tray_slot_placeholder="1")
         trays.append(tray)
     # Nested as DevFilaSystemParser::ParseV1_0 reads it: print.ams.ams, print.ams.tray_exist_bits (MRA build_ams_payload)
-    return {"ams": {"ams": [{"id": "0", "info": "0002", "tray": trays}], "ams_exist_bits": "1",
+    # display_name: the unit's name in the Device tab and the dialog's slot picker (DevFilaSystem.cpp ParseV1_0), else
+    # it is called after a Bambu AMS type
+    unit = {"id": "0", "info": "0002", "display_name": "U1", "tray": trays}
+    return {"ams": {"ams": [unit], "ams_exist_bits": "1",
                     "tray_exist_bits": "%X" % bits}}
 
 
@@ -129,8 +144,9 @@ def _remaining_minutes(view):
     return int(spent * (1 - p) / p // 60)
 
 
-def push_status(view, preferred=None):
-    """{"print": {...}} for on_local_message_fn, from u1.summarize(); preferred as ams_block."""
+def push_status(view, preferred=None, thumbnail=""):
+    """{"print": {...}} for on_local_message_fn, from u1.summarize(); preferred as ams_block; thumbnail: the current
+    file's picture URL (thumbnail_url), or "" for OrcaSlicer's placeholder."""
     state = view.get("state") or "standby"
     gstate = GCODE_STATE.get(state, "RUNNING")
     if gstate == "IDLE" and view.get("machine_state") not in ("", "IDLE", None):
@@ -141,6 +157,9 @@ def push_status(view, preferred=None):
     fan = view.get("fan") if isinstance(view.get("fan"), (int, float)) else 0
     p = {
         "command": "push_status", "msg": 0, "support_mqtt_alive": True, "sequence_id": "0",
+        "printer_type": U1_MODEL_ID,
+        # The Device tab's job picture (StatusPanel update_sdcard_subtask); empty keeps the placeholder
+        "thumbnail_url": thumbnail or "",
         "gcode_state": gstate, "mc_print_stage": PRINT_STAGE.get(state, 0),
         "mc_print_error_code": 0, "print_error": 0,
         # Both storage reports must say present or the dialog refuses LAN printing (MRA:2167-2184)
@@ -157,21 +176,61 @@ def push_status(view, preferred=None):
         "mc_percent": int(round(max(0.0, min(1.0, progress)) * 100)),
         "mc_remaining_time": _remaining_minutes(view),
         "layer_num": int(view.get("layer") or 0), "total_layer_num": int(view.get("total_layers") or 0),
+        "spd_lvl": speed_level(view.get("speed_factor")),
         "lights_report": [{"node": CHAMBER_LIGHT, "mode": "on" if view.get("light") else "off"}],
         **ams_block(view.get("heads") or [], preferred),
     }
+    if isinstance(view.get("chamber"), (int, float)):   # DevConfig: the Device tab shows it only when told to
+        p.update(chamber_temper=view["chamber"], support_chamber_temp_display=True)
     return {"print": p}
 
 
-def snapshot_url(webcams, base):
-    """The first enabled Moonraker webcam's snapshot URL (/server/webcams/list result), absolute against base; "" if
-    none. The Device tab shows it as OrcaSlicer's HTTP snapshot camera."""
+def speed_level(factor):
+    """The Device tab speed level nearest a gcode_move speed_factor (1.0 = 100 %); standard when unknown."""
+    if not isinstance(factor, (int, float)) or isinstance(factor, bool):
+        return 2
+    return min(SPEED_PERCENT, key=lambda lvl: (abs(factor * 100 - SPEED_PERCENT[lvl]), lvl != 2))
+
+
+def camera_source(webcams, base):
+    """(CameraStreamMode name, absolute URL) for the Device tab, from a /server/webcams/list result: the first enabled
+    webcam's MJPEG or RTSP stream (OrcaSlicer plays those), else its snapshot; with no webcam (the stock firmware lists
+    none) the stock camera picture, which needs camera.start_monitor to stay current (monitor_due)."""
+    def absolute(url):
+        return urllib.parse.urljoin(base.rstrip("/") + "/", url.strip()) if isinstance(url, str) and url.strip() else ""
     cams = webcams.get("webcams") if isinstance(webcams, dict) else None
     for cam in cams if isinstance(cams, list) else []:
-        url = cam.get("snapshot_url") if isinstance(cam, dict) and cam.get("enabled", True) else None
-        if isinstance(url, str) and url.strip():
-            return urllib.parse.urljoin(base.rstrip("/") + "/", url.strip())
-    return ""
+        if not isinstance(cam, dict) or not cam.get("enabled", True):
+            continue
+        stream, service = absolute(cam.get("stream_url")), str(cam.get("service") or "").lower()
+        if stream.lower().startswith("rtsp://"):
+            return "RTSP", stream
+        if stream and (not service or service.startswith("mjpegstreamer")):
+            return ("HTTPS" if stream.lower().startswith("https://") else "HTTP"), stream
+        if absolute(cam.get("snapshot_url")):
+            return "HTTP_SNAPSHOT", absolute(cam.get("snapshot_url"))
+    return "HTTP_SNAPSHOT", absolute(STOCK_CAMERA)
+
+
+def thumbnail_url(metadata, filename, base):
+    """The URL of the largest thumbnail in a /server/files/metadata result for filename (relative to the gcodes root;
+    the thumbnail paths are relative to its folder), or ""."""
+    thumbs = metadata.get("thumbnails") if isinstance(metadata, dict) else None
+    thumbs = [t for t in thumbs if isinstance(t, dict) and isinstance(t.get("relative_path"), str)
+              and t["relative_path"] and ".." not in t["relative_path"].split("/")] if isinstance(thumbs, list) else []
+    if not thumbs or not filename:
+        return ""
+    best = max(thumbs, key=lambda t: (t.get("width") or 0) * (t.get("height") or 0))
+    folder = str(filename).lstrip("/").rpartition("/")[0]
+    path = (folder + "/" if folder else "") + best["relative_path"]
+    return base.rstrip("/") + "/server/files/gcodes/" + urllib.parse.quote(path)
+
+
+def monitor_due(now, watched_at, requested_at):
+    """Whether to send camera.start_monitor now: the Device tab showed the stock camera picture in the last
+    MONITOR_WATCHED s, and the last request (None: never) is MONITOR_EVERY s old."""
+    return watched_at is not None and now - watched_at <= MONITOR_WATCHED and (
+        requested_at is None or now - requested_at >= MONITOR_EVERY)
 
 
 def version_reply(firmware, product="Snapmaker U1"):
@@ -192,7 +251,7 @@ def gcode_reply(seq, param, ok):
 
 def parse_command(json_str):
     """A Device tab command -> {"kind", ..., "seq"}. Kinds: get_version, get_access_code, pushall, noop, pause,
-    resume, stop, gcode (script), set_light (on), unsupported, invalid."""
+    resume, stop, gcode (script; also the speed level, as M220), set_light (on), unsupported, invalid."""
     try:
         msg = json.loads(json_str)
     except (TypeError, ValueError):
@@ -218,6 +277,8 @@ def parse_command(json_str):
         out = {"kind": "set_light", "on": body["led_mode"] == "on"}
     elif section == "print" and name in ("pause", "resume", "stop"):
         out = {"kind": name}
+    elif section == "print" and name == "print_speed" and str(body.get("param")) in ("1", "2", "3", "4"):
+        out = {"kind": "gcode", "script": "M220 S%d" % SPEED_PERCENT[int(body["param"])]}
     elif section == "print" and name == "gcode_line" and isinstance(body.get("param"), str) \
             and body["param"].strip():
         out = {"kind": "gcode", "script": body["param"]}   # MRA: Klipper runs it as given (guarded_line excepted)

@@ -1078,7 +1078,10 @@ class U1Agent(pa.PrinterAgentBase):
         self._links = ([], {})               # (spools, {toolhead: spool id}) the agent read from Spoolman itself
         self._links_busy = threading.Lock()
         self.base = ""
-        self.camera_url = ""                 # the Device tab's camera: Moonraker's first webcam, read at each connect
+        self.camera_url = ""                 # the Device tab's camera (agent.camera_source), read at each connect
+        self.camera_mode = "None_"
+        self._camera_watched = None          # time.monotonic() the Device tab last asked for the camera URL
+        self._monitor_at = None              # time.monotonic() of the last camera.start_monitor
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._commands = queue.Queue()   # Device tab commands, run in order by one worker (_command_worker)
@@ -1187,7 +1190,8 @@ class U1Agent(pa.PrinterAgentBase):
     def disconnect_printer(self):
         with self._lock:
             self._stop.set()
-            self.view, self.client, self.camera_url = None, None, ""
+            self.view, self.client, self.camera_url, self.camera_mode = None, None, "", "None_"
+            self._monitor_at = None
             while True:   # queued commands were for this printer: drop them (the worker also checks the client)
                 try:
                     if self._commands.get_nowait() is None:
@@ -1283,7 +1287,7 @@ class U1Agent(pa.PrinterAgentBase):
         return preferred
 
     def _poll(self, stop, client):
-        connected = False
+        connected, thumb = False, (None, "")   # thumb: (file name, its thumbnail URL), read once per file
         while not stop.is_set():
             try:
                 if not self.firmware:
@@ -1304,7 +1308,10 @@ class U1Agent(pa.PrinterAgentBase):
                     dev_id = self._dev_id()
                     self._emit("local_connect", 0, dev_id, "0")
                     self._emit("printer_connected", dev_id)
-                self._message(agent.push_status(view, self._preferred()))
+                if view.get("filename") != thumb[0]:
+                    thumb = (view.get("filename"), self._thumbnail(client, view.get("filename")))
+                self._message(agent.push_status(view, self._preferred(), thumb[1]))
+                self._keep_camera(stop, client)
             except Exception as e:
                 if connected:
                     log("agent: the U1 stopped answering (%s)" % e)
@@ -1315,21 +1322,59 @@ class U1Agent(pa.PrinterAgentBase):
             self._wake.wait(AGENT_POLL)
             self._wake.clear()
 
+    @staticmethod
+    def _thumbnail(client, filename):
+        """The Device tab's picture of the file the U1 prints or printed last, or "" (no file, no thumbnail)."""
+        if not filename:
+            return ""
+        try:
+            return agent.thumbnail_url(client.metadata(filename.lstrip("/")), filename, client.base or "")
+        except Exception as e:   # no metadata (file gone, or not a print file): OrcaSlicer's placeholder
+            log("agent: thumbnail of %s not read (%s)" % (filename, e))
+            return ""
+
     def _read_camera(self, stop, client):
         try:
-            url = agent.snapshot_url(client.request("GET", "/server/webcams/list"), client.base or "")
-        except Exception as e:   # no webcam API: the Device tab shows no camera
-            log("agent: webcam list not read (%s)" % e)
-            return
+            webcams = client.request("GET", "/server/webcams/list")
+        except Exception as e:   # no webcam API (stock firmware): its own camera picture
+            log("agent: webcam list not read (%s); the stock camera picture" % e)
+            webcams = None
+        mode, url = agent.camera_source(webcams, client.base or "")
         with self._lock:   # as the poll: never about an earlier connection's printer
             if not stop.is_set():
-                self.camera_url = url
+                self.camera_mode, self.camera_url = mode, url
+        self._wake.set()
+
+    def _keep_camera(self, stop, client):
+        """Poll thread: while the Device tab shows the stock camera picture, ask the U1 to keep renewing it."""
+        now = time.monotonic()
+        with self._lock:
+            stock = self.camera_url.endswith(agent.STOCK_CAMERA)
+            if not stock or stop.is_set() or not agent.monitor_due(now, self._camera_watched, self._monitor_at):
+                return
+            self._monitor_at = now
+
+        def start():
+            try:   # registered for websocket clients only (as service._push_frame)
+                client.ws_call("camera.start_monitor", {"domain": "lan", "interval": 0}, timeout=4)
+            except Exception as e:
+                log("agent: camera.start_monitor: %s" % e)
+        threading.Thread(target=start, name="u1control-camera-monitor", daemon=True).start()
 
     def get_camera_stream_mode(self):
-        return pa.CameraStreamMode.HTTP_SNAPSHOT if self.camera_url else pa.CameraStreamMode.None_
+        return getattr(pa.CameraStreamMode, self.camera_mode, pa.CameraStreamMode.None_) if self.camera_url \
+            else pa.CameraStreamMode.None_
 
     def get_camera_url(self):
+        self._camera_watched = time.monotonic()   # OrcaSlicer asks on every Device tab update while it shows the U1
         return self.camera_url
+
+    def command_start_camera(self, dev_id):
+        """The Device tab's Play: renew the stock camera picture now rather than at the next keepalive."""
+        with self._lock:
+            self._camera_watched, self._monitor_at = time.monotonic(), None
+        self._wake.set()
+        return OK
 
     # Device tab commands ------------------------------------------------------------------------------------
     def send_message(self, dev_id, json_str, qos, flag):
@@ -1409,11 +1454,17 @@ class U1Agent(pa.PrinterAgentBase):
 
     # jobs (OrcaSlicer's job threads: blocking is fine) ---------------------------------------------------------
     def _job_client(self, params):
-        host = self.host or host_of(getattr(params, "dev_ip", ""))
-        key = self.api_key or clean(getattr(params, "password", ""))
+        """The printer the job names (PrintParams.dev_ip, as OrcaSlicer's Multi-device tab sends it), else the
+        connected one. Never the connected U1 for a job that names another."""
+        asked = host_of(getattr(params, "dev_ip", ""))
+        with self._lock:
+            connected, key, base = self.host, self.api_key, self.base
+        host = asked or connected
         if not host:
             raise PrinterError(tr(NO_ADDRESS))
-        return host, key, Moonraker(self.base if self.host else base_url(host), key, timeout=10)
+        if host != connected:   # another U1: its own address and key from the job
+            key, base = clean(getattr(params, "password", "")), base_url(host)
+        return host, key, Moonraker(base, key, timeout=10)
 
     @staticmethod
     def _job_path(params):
@@ -1609,7 +1660,7 @@ class CheckConnection(orca.script.ScriptPluginCapabilityBase):
             return orca.ExecutionResult.skipped(tr("Couldn't reach the U1: %s") % e)
         fw = u1.detect_firmware(info, ext_status)   # as the tab does: the version alone misses some Extended builds
         loaded = ", ".join("T%d %s" % (h["index"] + 1, ("%s %s" % (h["type"], h["colour"] or "")).strip()
-                                       if h["loaded"] else tr("empty")) for h in heads)
+                                       if h["loaded"] else tr("not named") if h.get("unnamed") else tr("empty")) for h in heads)
         about = tr("U1 at %s (Extended Firmware %s)") if fw["kind"] == "extended" else tr("U1 at %s (official firmware %s)")
         return orca.ExecutionResult.success("%s. %s" % (about % (client.address, fw["version"]), loaded))
 

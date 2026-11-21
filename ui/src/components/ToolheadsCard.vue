@@ -17,7 +17,7 @@ const source = computed(() => {
 });
 </script>
 <template>
-  <OuiPanel :icon="toolhead" tone="magenta" aria-labelledby="heads-h">
+  <OuiPanel class="u1-heads" :icon="toolhead" tone="magenta" aria-labelledby="heads-h">
     <template #title><span id="heads-h">{{ t('heads.title') }}</span></template>
     <template #meta><span data-test="spool-source" :title="source">{{ source }}</span></template>
     <!-- Why Edit, Load and Unload are off is said once for the page (#heads-why, under the page header), not in each card. -->
@@ -31,6 +31,11 @@ const source = computed(() => {
   </OuiPanel>
 </template>
 <style>
+/* Two cards a row in half the dashboard, four only when the widget is really wide. */
+.u1-heads .oui-cards { --oui-cards-4: 1300px; }
+/* The cards are as tall as their content: when the dashboard row is taller (the other half needs more), the room left is
+   under the cards, never a blank band inside each card between its content and its actions. */
+
 .u1-skelcard { display: grid; gap: var(--oui-s3); align-content: start; min-height: 180px; padding: var(--oui-s3); border-radius: var(--oui-radius-lg); background: var(--oui-raised); }
 .u1-skelcard > .oui-skeleton:nth-child(1) { width: 30%; }
 .u1-skelcard > .oui-skeleton:nth-child(2) { width: 80%; }
