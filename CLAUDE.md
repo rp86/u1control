@@ -6,6 +6,14 @@
 - Full commands: `docs/agents/branching.md`.
 - `.scratch/` and these docs exist only on `local-use`; run the issue-tracker skills from the `local-use` checkout. Never include them in a PR to upstream.
 
+### Agent directives
+
+- Before committing, check `git branch --show-current`. If it is `main`, stop and switch; never commit there.
+- To fix a bug or build a feature, create a worktree from `main` (`fix/<slug>` or `feat/<slug>`) rather than editing on `local-use`, unless the change is explicitly local-only.
+- Never create a branch from `local-use`.
+- Before opening a PR to upstream, run `git diff --stat upstream/main...HEAD` and confirm no `CLAUDE.md`, `docs/agents/`, `GLOSSARY.md`, `docs/adr/` or `.scratch/` files are included.
+- Commit issue-tracker, glossary and ADR changes on `local-use` only.
+
 ## Agent skills
 
 ### Issue tracker
