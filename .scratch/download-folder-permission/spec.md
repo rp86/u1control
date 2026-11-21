@@ -12,3 +12,7 @@ Source: https://github.com/bloodf/u1control/issues/73 ("Gcode thumbnail permissi
 
 - Thumbnails (`.thumbs/*`) and time-lapse covers are returned to the page in memory; nothing is written to disk for them. `/screen/touch` is a POST to the printer. Those three paths in the report are network URLs, so the download-folder grant does not touch them. It does fix real per-file prompts for files saved to the download folder (time-lapse videos, pictures).
 - Per-URL network prompts happen only when the printer's origin was not granted at load: the origins come from the settings `host` and the printers used before (`network_origins`), and a printer first used in a session is left to runtime prompts until the next load. That is ticket 04.
+
+## Root cause (confirmed 2026-11-21)
+
+OrcaSlicer 2.5.1 answers `plugin.storage()` only for a registered plugin with a current-plugin context, never inside `register_capabilities`. The settings could not be opened at load, so the load-time network request carried no printer address and every URL prompted for itself (the per-URL entries in the Permissions tab). Fix: the printer's `scheme://host` is kept in `<OrcaSlicer data dir>/u1control/hosts.json` (data dir from the plugin's install path, as in the Profile Library plugin) and read at load. Verified by the reporter: the per-URL prompts stopped. Branch `fix/download-folder-grant`, commit 3aae43b, not pushed.
